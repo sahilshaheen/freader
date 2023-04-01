@@ -1,0 +1,44 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# Log files
+*.log
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Dependency folders
+node_modules/
+jspm_packages/
+
+# Jupyter Notebook files
+.ipynb_checkpoints/
+
+# Compiled Python files
+*.pyc
+*.pyo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+*.env
+
+**/scratch*

@@ -1,0 +1,1 @@
+{"sql_url": "postgresql://postgres:wubbalubba@localhost:5432/postgres", "embedding_dim": 384}

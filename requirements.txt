@@ -1,0 +1,6 @@
+farm-haystack[faiss,crawler]
+fastapi
+uvicorn
+
+pre-commit
+black
