@@ -4,8 +4,8 @@
 def run_indexing_pipeline(pipeline, index_name, urls, depth):
     pipeline.run(
         params={
-            "crawler": {"urls": urls, "crawler_depth": depth},
-            # "document_store": {"index": index_name},
+            "Crawler": {"urls": urls, "crawler_depth": depth},
+            "Shaper": {"meta": {"index_name": index_name}},
         }
     )
 
@@ -16,7 +16,23 @@ def run_query_pipeline(
     return pipeline.run(
         query,
         params={
-            "prompt_node": {"prompt_template": prompt_template},
-            # "retriever": {"index": index_name},
+            "Prompter": {"prompt_template": prompt_template},
+            "Shaper": {
+                "meta": {"index_name": index_name} if index_name is not None else {}
+            },
         },
     )
+
+
+def add_metadata_to_documents(documents, meta):
+    for doc in documents:
+        doc.meta = {**doc.meta, **meta}
+    return documents
+
+
+def filter_documents_by_metadata(documents, meta={}):
+    filtered_documents = []
+    for doc in documents:
+        if all([doc.meta.get(key) == value for key, value in meta.items()]):
+            filtered_documents.append(doc)
+    return filtered_documents
