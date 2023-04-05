@@ -8,6 +8,7 @@ from src.utils import run_indexing_pipeline, run_query_pipeline
 from fastapi import FastAPI, BackgroundTasks
 from src.pipelines import load_indexing_pipeline, load_query_pipeline
 from src.retrievers import load_embedding_retriever
+from src.utils import upsert_index, get_all_indices
 
 load_dotenv()
 use_oai = os.getenv("USE_OPENAI_API")
@@ -53,14 +54,20 @@ async def root():
     return {"message": "Server is up and running!"}
 
 
+@app.get("/indices")
+async def get_indices():
+    return get_all_indices(store.session)
+
+
 @app.post("/index")
 async def create_index(background_tasks: BackgroundTasks, request: IndexRequest):
     def scrape_and_index():
         run_indexing_pipeline(
             indexing_pipeline, request.index_name, request.urls, request.crawler_depth
         )
-        store.update_embeddings(retriever, index=request.index_name)
+        store.update_embeddings(retriever)
         store.save(faiss_index_path)
+        upsert_index(store.session, request.index_name, request.urls)
 
     background_tasks.add_task(scrape_and_index)
 

@@ -1,4 +1,21 @@
 # "Saving and loading" multiple FAISS indices in a single store is not supported: https://github.com/deepset-ai/haystack/issues/3554
+from src.schema import IndexORM
+
+
+def upsert_index(session, index_name, urls):
+    index = session.query(IndexORM).filter(IndexORM.name == index_name).first()
+    if index is None:
+        index = IndexORM(name=index_name, urls=urls)
+        session.add(index)
+    else:
+        for url in urls:
+            if url not in index.urls:
+                index.urls.append(url)
+    session.commit()
+
+
+def get_all_indices(session):
+    return session.query(IndexORM).all()
 
 
 def run_indexing_pipeline(pipeline, index_name, urls, depth):
