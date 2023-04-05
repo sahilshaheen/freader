@@ -42,3 +42,5 @@ Thumbs.db
 *.env
 
 **/scratch*
+app_index.faiss
+app_index.json
