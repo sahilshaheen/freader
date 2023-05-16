@@ -28,15 +28,26 @@ def run_indexing_pipeline(pipeline, index_name, urls, depth):
 
 
 def run_query_pipeline(
-    pipeline, query, index_name, prompt_template="question-answering"
+    pipeline,
+    query,
+    index_name,
+    top_k,
+    prompt_template="question-answering",
 ):
+    retriever_params = {}
+    if top_k is not None:
+        retriever_params["top_k"] = top_k
+    else:
+        retriever_params["top_k"] = 5
+    shaper_params = {}
+    if index_name is not None:
+        shaper_params["meta"] = {"index_name": index_name}
     return pipeline.run(
         query,
         params={
+            "Retriever": retriever_params,
+            "Shaper": shaper_params,
             "Prompter": {"prompt_template": prompt_template},
-            "Shaper": {
-                "meta": {"index_name": index_name} if index_name is not None else {}
-            },
         },
     )
 

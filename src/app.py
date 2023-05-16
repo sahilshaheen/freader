@@ -76,7 +76,9 @@ async def create_index(background_tasks: BackgroundTasks, request: IndexRequest)
 
 @app.post("/query")
 async def run_query(request: QueryRequest):
-    query_res = run_query_pipeline(query_pipeline, request.query, request.index_name)
+    query_res = run_query_pipeline(
+        query_pipeline, request.query, request.index_name, request.top_k
+    )
     return list(map(lambda answer: answer.to_dict(), query_res["answers"]))
 
 
