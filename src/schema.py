@@ -1,10 +1,10 @@
-from pydantic import BaseModel
 from typing import List, Optional
+
+from pydantic import BaseModel
 from typing_extensions import Literal
-from haystack.document_stores.sql import ORMBase
-from haystack.schema import FilterType
 from sqlalchemy import Column, String, ARRAY
-from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.schema import PrimaryKeyConstraint
 
 
 class IndexRequest(BaseModel):
@@ -15,11 +15,16 @@ class IndexRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    index_name: Optional[str]
-    top_k: Optional[int]
+    index_name: Optional[str] = "default"
 
 
-class IndexORM(ORMBase):
+Base = declarative_base()
+
+
+class IndexORM(Base):
     __tablename__ = "index"
-    name = Column(String, unique=True, nullable=False)
+
+    name = Column(String, primary_key=True)
     urls = Column(ARRAY(String), nullable=False)
+
+    __table_args__ = (PrimaryKeyConstraint("name"),)

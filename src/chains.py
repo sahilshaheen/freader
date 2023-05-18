@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 import requests
 import anthropic
@@ -15,7 +15,13 @@ from langchain.chains import RetrievalQA, RetrievalQAWithSourcesChain
 from langchain.prompts import HumanMessagePromptTemplate
 from langchain.schema import HumanMessage, AIMessage
 
-from src.utils import retry, list_depth
+from src.utils import (
+    retry,
+    list_depth,
+    read_indices_list,
+    write_indices_list,
+    upsert_index,
+)
 
 # import torch
 # from transformers import pipeline
@@ -44,6 +50,7 @@ MODEL_KWARGS = {"default": {}, "fake": {"size": 1}}
 LLM_ARGS = {
     "default": {},
     "tagger": {"temperature": 0.8},
+    "reader": {"temperature": 0},
     "stablelm": {
         "model_id": "stabilityai/stablelm-tuned-alpha-3b",
         "task": "text-generation",
@@ -60,13 +67,23 @@ LLM_ARGS = {
 }
 
 
-class Freader:
+class LLM:
     def __init__(
         self,
+        llm_id="openai",
+        llm_kwargs_id="default",
+    ):
+        self.llm = LLMS[llm_id](**LLM_ARGS[llm_kwargs_id])
+
+
+class Freader(LLM):
+    def __init__(
+        self,
+        index_name: str,
         faiss_path: str,
         chain_id: str = "qa_source",
         llm_id="openai",
-        llm_kwargs_id="default",
+        llm_kwargs_id="reader",
         model_id="instructor_large",
         model_kwargs_id="default",
         loader_type: Literal["bs", "unstructured"] = "bs",
@@ -74,13 +91,14 @@ class Freader:
         chunk_overlap: int = 50,
         chain_type: str = "stuff",
     ):
+        super().__init__(llm_id=llm_id, llm_kwargs_id=llm_kwargs_id)
         self.loader_type = loader_type
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
         )
-        self.llm = LLMS[llm_id](**LLM_ARGS[llm_kwargs_id])
+        self.index_name = index_name
         self.model = EMBEDDING_MODELS[model_id](**MODEL_KWARGS[model_kwargs_id])
         self.faiss_path = faiss_path
         self.chain_type = chain_type
@@ -90,11 +108,13 @@ class Freader:
             self.chain = CHAINS[self.chain_id].from_chain_type(
                 llm=self.llm, chain_type=chain_type, retriever=self.db.as_retriever()
             )
+            if self.chain_id == "qa_source":
+                self.chain.return_source_documents = True
 
     def infer_with_llm(self, text):
         return self.llm(text)
 
-    def index(self, url, loader_type: Optional[Literal["bs", "unstructured"]] = None):
+    def _index(self, url, loader_type):
         try:
             if loader_type is None:
                 loader_type = self.loader_type
@@ -130,6 +150,15 @@ class Freader:
             logging.error(f"Failed to index {url}: {e}")
         return False
 
+    def index_multiple(
+        self, urls, loader_type: Optional[Literal["bs", "unstructured"]] = None
+    ):
+        for url in urls:
+            is_successful = self._index(url, loader_type=loader_type)
+            if not is_successful:
+                return False
+        return True
+
     def query(self, text: str):
         if not hasattr(self, "chain"):
             raise ValueError("You must index some documents before you can query.")
@@ -142,13 +171,14 @@ class Freader:
     def _save(self):
         try:
             self.db.save_local(self.faiss_path)
+            write_indices_list(self.index_name, self.faiss_path)
             return True
         except Exception as e:
             logging.error(f"Failed to save FAISS index to {self.faiss_path}: {e}")
         return False
 
 
-class SongTagger(Freader):
+class SongTagger(LLM):
     PROMPT = """Here are the song titles along with the artist name(s):\n{songs}"""
     MESSAGES = [
         HumanMessage(
@@ -160,14 +190,8 @@ class SongTagger(Freader):
     ]
     DUMMY = {"name": "Love Me Do", "artist": "The Beatles"}
 
-    def __init__(self, faiss_path: str):
-        super().__init__(
-            faiss_path=faiss_path,
-            llm_id="claude",
-            llm_kwargs_id="tagger",
-            model_id="fake",
-            model_kwargs_id="fake",
-        )
+    def __init__(self):
+        super().__init__(llm_id="claude", llm_kwargs_id="tagger")
         self.prompter = HumanMessagePromptTemplate.from_template(SongTagger.PROMPT)
 
     def _format_tracks(self, tracks):
@@ -219,3 +243,17 @@ class SongTagger(Freader):
         input = [*SongTagger.MESSAGES, human_message]
         output = self._get_output_and_verify(input, songs)
         return self._normalize_output(output)
+
+
+def get_readers():
+    indices = read_indices_list()
+    return {
+        index_name: Freader(index_name, faiss_path=index_path)
+        for index_name, index_path in indices.items()
+    }
+
+
+def add_reader(readers, index_name):
+    index_path = f"data/{index_name}"
+    reader = Freader(index_name, index_path)
+    readers[index_name] = reader
