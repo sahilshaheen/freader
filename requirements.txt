@@ -4,3 +4,10 @@ uvicorn
 
 pre-commit
 black
+
+openai
+langchain
+InstructorEmbedding
+unstructured
+beautifulsoup4
+accelerate
