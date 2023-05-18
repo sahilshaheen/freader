@@ -20,8 +20,10 @@ from src.utils import (
     list_depth,
     read_indices_list,
     write_indices_list,
-    upsert_index,
 )
+
+LLM_CACHE = {}
+EMBEDDING_MODEL_CACHE = {}
 
 # import torch
 # from transformers import pipeline
@@ -73,7 +75,11 @@ class LLM:
         llm_id="openai",
         llm_kwargs_id="default",
     ):
-        self.llm = LLMS[llm_id](**LLM_ARGS[llm_kwargs_id])
+        if (llm_id, llm_kwargs_id) in LLM_CACHE:
+            self.llm = LLM_CACHE[(llm_id, llm_kwargs_id)]
+        else:
+            self.llm = LLMS[llm_id](**LLM_ARGS[llm_kwargs_id])
+            LLM_CACHE[(llm_id, llm_kwargs_id)] = self.llm
 
 
 class Freader(LLM):
@@ -99,7 +105,11 @@ class Freader(LLM):
             length_function=len,
         )
         self.index_name = index_name
-        self.model = EMBEDDING_MODELS[model_id](**MODEL_KWARGS[model_kwargs_id])
+        if (model_id, model_kwargs_id) in EMBEDDING_MODEL_CACHE:
+            self.model = EMBEDDING_MODEL_CACHE[(model_id, model_kwargs_id)]
+        else:
+            self.model = EMBEDDING_MODELS[model_id](**MODEL_KWARGS[model_kwargs_id])
+            EMBEDDING_MODEL_CACHE[(model_id, model_kwargs_id)] = self.model
         self.faiss_path = faiss_path
         self.chain_type = chain_type
         self.chain_id = chain_id
