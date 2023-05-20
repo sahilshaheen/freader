@@ -2,8 +2,9 @@
 
 A simple FastAPI server that leverages langchain to index information and query the resulting indices using LLMs.
 
-Roadmap:
+## Roadmap
+
 - FAISS -> FAISS + DB
-- Flexibility in input: URLs -> URLs, raw text, etc. (support as many document loaders from lanchain as necessary)
+- Flexibility in input: URLs -> URLs, raw text, etc. (support as many document loaders from langchain as necessary)
 - Topic modelling with input
 - Search filters
