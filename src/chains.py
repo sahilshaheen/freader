@@ -10,7 +10,7 @@ from langchain.document_loaders import BSHTMLLoader, UnstructuredHTMLLoader
 from langchain.embeddings import HuggingFaceInstructEmbeddings, FakeEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI, HuggingFaceHub, HuggingFacePipeline
-from langchain.chat_models import ChatAnthropic
+from langchain.chat_models import ChatAnthropic, PromptLayerChatOpenAI
 from langchain.chains import RetrievalQA, RetrievalQAWithSourcesChain
 from langchain.prompts import HumanMessagePromptTemplate, PromptTemplate
 from langchain.schema import HumanMessage, AIMessage, BaseMessage
@@ -40,6 +40,7 @@ LLMS = {
     "hf-local": lambda **kwargs: HuggingFacePipeline.from_model_id(**kwargs),
     "hf-pipe": HuggingFacePipeline,
     "claude": ChatAnthropic,
+    "pl-gpt": PromptLayerChatOpenAI,
 }
 
 EMBEDDING_MODELS = {
@@ -88,7 +89,7 @@ class NotIndexedError(Exception):
 class LLM:
     def __init__(
         self,
-        llm_id="openai",
+        llm_id="pl-gpt",
         llm_kwargs_id="default",
     ):
         self.llm_id = llm_id
@@ -99,7 +100,7 @@ class LLM:
             LLM_CACHE[(llm_id, llm_kwargs_id)] = self.llm
 
     def generate(self, input: Union[str, MessageChain]) -> str:
-        if self.llm_id == "claude":
+        if self.llm_id in ["claude", "pl-gpt"]:
             if not is_message_chain(input):
                 input = [HumanMessage(content=input)]
             return self.llm(input).content
@@ -111,7 +112,9 @@ class LLM:
         vars: Dict[str, str],
         history: Optional[MessageChain] = None,
     ):
-        if history is not None:
+        if self.llm_id in ["claude", "pl-gpt"]:
+            if history is None:
+                history = []
             prompter = HumanMessagePromptTemplate.from_template(template)
             prompt = prompter.format(**vars)
             input = [*history, prompt]
@@ -216,11 +219,15 @@ class Freader(LLM):
         self.chain_id = chain_id
         if os.path.exists(faiss_path):
             self.db = FAISS.load_local(faiss_path, self.model)
-            self.chain = CHAINS[self.chain_id].from_chain_type(
-                llm=self.llm, chain_type=chain_type, retriever=self.db.as_retriever()
-            )
-            if self.chain_id == "qa_source":
-                self.chain.return_source_documents = True
+            self._init_chain()
+
+    def _init_chain(self):
+        self.chain = CHAINS[self.chain_id].from_chain_type(
+            llm=self.llm,
+            chain_type=self.chain_type,
+            retriever=self.db.as_retriever(),
+        )
+        self.chain.return_source_documents = True
 
     def index_raw(self, raw: str, metadata: dict = None):
         docs = self.splitter.create_documents(texts=[raw], metadatas=[metadata])
@@ -228,11 +235,7 @@ class Freader(LLM):
             self.db.add_documents(docs)
         else:
             self.db = FAISS.from_documents(docs, self.model)
-            self.chain = CHAINS[self.chain_id].from_chain_type(
-                llm=self.llm,
-                chain_type=self.chain_type,
-                retriever=self.db.as_retriever(),
-            )
+            self._init_chain()
         self._save()
 
     def _index_url(self, url: str, loader_type: Literal["bs", "unstructured"]):
@@ -260,11 +263,7 @@ class Freader(LLM):
                 self.db.add_documents(docs)
             else:
                 self.db = FAISS.from_documents(docs, self.model)
-                self.chain = CHAINS[self.chain_id].from_chain_type(
-                    llm=self.llm,
-                    chain_type=self.chain_type,
-                    retriever=self.db.as_retriever(),
-                )
+                self._init_chain()
             self._save()
             return True
         except Exception as e:

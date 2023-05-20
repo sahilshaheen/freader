@@ -11,3 +11,5 @@ InstructorEmbedding
 unstructured
 beautifulsoup4
 accelerate
+promptlayer
+anthropic
