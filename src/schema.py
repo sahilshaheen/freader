@@ -9,7 +9,9 @@ from sqlalchemy.schema import PrimaryKeyConstraint
 
 class IndexRequest(BaseModel):
     index_name: str
-    urls: List[str]
+    metadata: dict = None
+    urls: List[str] = None
+    raw: str = None
     crawler_depth: Literal[0, 1] = 0
 
 
