@@ -7,7 +7,11 @@ import requests
 import anthropic
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import BSHTMLLoader, UnstructuredHTMLLoader
-from langchain.embeddings import HuggingFaceInstructEmbeddings, FakeEmbeddings
+from langchain.embeddings import (
+    HuggingFaceInstructEmbeddings,
+    FakeEmbeddings,
+    OpenAIEmbeddings,
+)
 from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI, HuggingFaceHub, HuggingFacePipeline
 from langchain.chat_models import ChatAnthropic, PromptLayerChatOpenAI
@@ -46,6 +50,7 @@ LLMS = {
 EMBEDDING_MODELS = {
     "instructor_large": HuggingFaceInstructEmbeddings,
     "fake": FakeEmbeddings,
+    "openai": OpenAIEmbeddings,
 }
 
 MODEL_KWARGS = {"default": {}, "fake": {"size": 1}}
@@ -191,24 +196,26 @@ class Freader(LLM):
         self,
         index_name: str,
         faiss_path: str,
-        chain_id: str = "qa_source",
-        llm_id="openai",
+        llm_id="pl-gpt",
         llm_kwargs_id="reader",
         model_id="instructor_large",
         model_kwargs_id="default",
+        chain_id: str = "qa_source",
         loader_type: Literal["bs", "unstructured"] = "bs",
         chunk_size: int = 200,
         chunk_overlap: int = 50,
         chain_type: str = "stuff",
+        retrieval_only=False,
     ):
         super().__init__(llm_id=llm_id, llm_kwargs_id=llm_kwargs_id)
         self.loader_type = loader_type
+        self.index_name = index_name
+        self.retrieval_only = retrieval_only
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            length_function=len,
+            length_function=lambda x: len(x.split()),
         )
-        self.index_name = index_name
         if (model_id, model_kwargs_id) in EMBEDDING_MODEL_CACHE:
             self.model = EMBEDDING_MODEL_CACHE[(model_id, model_kwargs_id)]
         else:
@@ -284,6 +291,8 @@ class Freader(LLM):
     def query(self, text: str):
         if not hasattr(self, "chain"):
             raise ValueError("You must index some documents before you can query.")
+        if self.retrieval_only:
+            return self.chain.retriever.get_relevant_documents(text)
         if self.chain_id == "qa":
             return self.chain.run(text)
         if self.chain_id == "qa_source":
@@ -293,7 +302,7 @@ class Freader(LLM):
     def _save(self):
         try:
             self.db.save_local(self.faiss_path)
-            write_indices_list(self.index_name, self.faiss_path)
+            write_indices_list(index_name=self.index_name, faiss_path=self.faiss_path)
             return True
         except Exception as e:
             logging.error(f"Failed to save FAISS index to {self.faiss_path}: {e}")
@@ -354,10 +363,7 @@ class SongTagger(BaseTagger):
 
 def get_readers():
     indices = read_indices_list()
-    return {
-        index_name: Freader(index_name, faiss_path=index_path)
-        for index_name, index_path in indices.items()
-    }
+    return {index_name: Freader(**kwargs) for index_name, kwargs in indices.items()}
 
 
 def add_reader(readers, index_name):

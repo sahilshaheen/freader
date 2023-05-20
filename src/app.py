@@ -33,7 +33,6 @@ async def get_indices(session: Session = Depends(get_session)):
 
 @app.post("/index")
 async def index(background_tasks: BackgroundTasks, request: IndexRequest):
-    print(request.metadata)
     if request.urls is None and request.raw is None:
         raise HTTPException(
             status_code=400, detail="Either urls or raw must be provided."

@@ -15,3 +15,26 @@ A simple FastAPI server that leverages langchain to index information and query 
   - [ ] Incorporate tags into metadata while indexing
 - [ ] FAISS -> FAISS + DB (Low priority)
 - [ ] Search filters (Low priority)
+
+## (Not So Obvious) Configuration
+
+Freaders corresponding to indices created at runtime will be initialized with the default values. This behaviour can be overwritten for indices by populating the configuration for an index in `indices.json`:
+
+```json
+{
+ "default": {
+    "index_name": "default",
+    "faiss_path": "data/default"
+  },
+  "code": {
+    "index_name": "code",
+    "faiss_path": "data/code",
+    "model_id": "openai",
+    "retrieval_only": true,
+    "chunk_size": 1000,
+    "chunk_overlap": 0
+  }
+}
+```
+
+Now when the "code" index is loaded/created at runtime, it takes the specified initialization values.

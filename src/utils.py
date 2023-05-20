@@ -61,9 +61,9 @@ def read_indices_list():
         return json.loads(f.read())
 
 
-def write_indices_list(index_name, index_path):
+def write_indices_list(**kwargs):
     current_indices = read_indices_list()
-    if index_name not in current_indices:
-        current_indices[index_name] = index_path
+    if kwargs["index_name"] not in current_indices:
+        current_indices[kwargs["index_name"]] = kwargs
         with open("indices.json", "w") as f:
             f.write(json.dumps(current_indices))
