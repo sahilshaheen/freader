@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, List, TypedDict, Union, Dict
 
 import requests
 import anthropic
@@ -12,8 +12,8 @@ from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI, HuggingFaceHub, HuggingFacePipeline
 from langchain.chat_models import ChatAnthropic
 from langchain.chains import RetrievalQA, RetrievalQAWithSourcesChain
-from langchain.prompts import HumanMessagePromptTemplate
-from langchain.schema import HumanMessage, AIMessage
+from langchain.prompts import HumanMessagePromptTemplate, PromptTemplate
+from langchain.schema import HumanMessage, AIMessage, BaseMessage
 
 from src.utils import (
     retry,
@@ -68,6 +68,22 @@ LLM_ARGS = {
     # }
 }
 
+Song = TypedDict("Song", {"name": str, "artist": str})
+
+MessageChain = List[Union[HumanMessage, AIMessage, BaseMessage]]
+
+
+def is_message_chain(obj):
+    return isinstance(obj, list) and all(
+        isinstance(msg, (HumanMessage, AIMessage, BaseMessage)) for msg in obj
+    )
+
+
+class NotIndexedError(Exception):
+    """Raised when trying to query before indexing documents."""
+
+    pass
+
 
 class LLM:
     def __init__(
@@ -75,11 +91,96 @@ class LLM:
         llm_id="openai",
         llm_kwargs_id="default",
     ):
+        self.llm_id = llm_id
         if (llm_id, llm_kwargs_id) in LLM_CACHE:
             self.llm = LLM_CACHE[(llm_id, llm_kwargs_id)]
         else:
             self.llm = LLMS[llm_id](**LLM_ARGS[llm_kwargs_id])
             LLM_CACHE[(llm_id, llm_kwargs_id)] = self.llm
+
+    def generate(self, input: Union[str, MessageChain]) -> str:
+        if self.llm_id == "claude":
+            if not is_message_chain(input):
+                input = [HumanMessage(content=input)]
+            return self.llm(input).content
+        return self.llm(input)
+
+    def generate_with_prompt(
+        self,
+        template: str,
+        vars: Dict[str, str],
+        history: Optional[MessageChain] = None,
+    ):
+        if history is not None:
+            prompter = HumanMessagePromptTemplate.from_template(template)
+            prompt = prompter.format(**vars)
+            input = [*history, prompt]
+        else:
+            prompter = PromptTemplate(
+                input_variables=list(vars.keys()), template=template
+            )
+            input = prompter.format(**vars)
+        result = self.generate(input)
+        return result
+
+
+class BaseTagger(LLM):
+    PROMPT = """Generate at least 5 tags for the following snippet. Format the output as a JSON list and return only the list.
+
+{snippet}"""
+
+    def __init__(self, llm_id="openai", llm_kwargs_id="default", template: str = None):
+        super().__init__(llm_id=llm_id, llm_kwargs_id=llm_kwargs_id)
+        if template is None:
+            self.template = BaseTagger.PROMPT
+        else:
+            self.template = template
+
+    def _parse_list(self, output: str, min_length=0):
+        output_obj = json.loads(output)
+        assert (
+            type(output_obj) == list
+        ), f"Expected output to be a list, got {output_obj}"
+        if min_length:
+            assert (
+                len(output_obj) >= min_length
+            ), f"Expected at least 5 tags, got {len(output_obj)}"
+        return output_obj
+
+    def _normalize_tag(self, tag: str):
+        # Remove special characters
+        tag = "".join([c for c in tag if c.isalnum() or c == " " or c == "&"])
+
+        # Lowercase
+        tag = tag.lower()
+
+        # Remove extra whitespaces
+        tag = " ".join([word for word in tag.split(" ") if word])
+
+        return tag
+
+    @retry(3, 0.1)
+    def __call__(self, snippet: str):
+        output = self.generate_with_prompt(self.template, {"snippet": snippet})
+        output_obj = self._parse_list(output, min_length=5)
+        return [self._normalize_tag(tag) for tag in output_obj]
+
+
+class CodeTagger(BaseTagger):
+    PROMPT = """Generate at least 5 tags the following piece of code enclosed in code tags. Try to include tags specifying language, libraries/packages used, task(s) fulfilled, programming paradigm. Format the output as a JSON list and return only the list.
+
+<code>
+{snippet}
+</code>"""
+
+    def __init__(
+        self,
+        llm_id="openai",
+        llm_kwargs_id="default",
+    ):
+        super().__init__(
+            llm_id=llm_id, llm_kwargs_id=llm_kwargs_id, template=CodeTagger.PROMPT
+        )
 
 
 class Freader(LLM):
@@ -121,10 +222,20 @@ class Freader(LLM):
             if self.chain_id == "qa_source":
                 self.chain.return_source_documents = True
 
-    def infer_with_llm(self, text):
-        return self.llm(text)
+    def index_raw(self, raw: str, metadata: dict = None):
+        docs = self.splitter.create_documents(texts=[raw], metadatas=[metadata])
+        if hasattr(self, "db"):
+            self.db.add_documents(docs)
+        else:
+            self.db = FAISS.from_documents(docs, self.model)
+            self.chain = CHAINS[self.chain_id].from_chain_type(
+                llm=self.llm,
+                chain_type=self.chain_type,
+                retriever=self.db.as_retriever(),
+            )
+        self._save()
 
-    def _index(self, url, loader_type):
+    def _index_url(self, url: str, loader_type: Literal["bs", "unstructured"]):
         try:
             if loader_type is None:
                 loader_type = self.loader_type
@@ -160,8 +271,10 @@ class Freader(LLM):
             logging.error(f"Failed to index {url}: {e}")
         return False
 
-    def index_multiple(
-        self, urls, loader_type: Optional[Literal["bs", "unstructured"]] = None
+    def index_multiple_urls(
+        self,
+        urls: List[str],
+        loader_type: Optional[Literal["bs", "unstructured"]] = None,
     ):
         for url in urls:
             is_successful = self._index(url, loader_type=loader_type)
@@ -188,71 +301,56 @@ class Freader(LLM):
         return False
 
 
-class SongTagger(LLM):
+class SongTagger(BaseTagger):
     PROMPT = """Here are the song titles along with the artist name(s):\n{songs}"""
-    MESSAGES = [
+    HISTORY = [
         HumanMessage(
-            content='I want you to generate tags for the following songs. The tags must be musically and culturally informative as I plan to use them to find songs and make playlists. Generate around 5 tags per song that are information-rich. It is okay if you cannot meet this number, so do not generate low-quality tags to meet the requirement. It is also okay if you can generate more than 5 if you think the extra tags are high quality. The output must be in the format of a Python list of lists where each element corresponds to one song. Use double quotes and return ONLY the list. Use double quotes and return ONLY the list like so [["tag_1", "tag_2"], ["tag_2"]]. Do you understand?'
+            content="I want you to generate tags for the songs that I provide in the next input. The tags must be musically and culturally informative as I plan to use them to find songs and make playlists. Generate around 5 tags per song. The output must be in the format of a JSON-serialized list of lists where each element corresponds to one song. Return only the list. Do you understand?"
         ),
         AIMessage(
-            content="I understand. I will aim to generate 3 to 8 high-quality, musically and culturally informative tags per song in the format of a Python list of lists with each inner list corresponding to the tags for one song."
+            content="Yes, I understand. Please provide the song inputs and I will generate musically and culturally informative tags for each song as a JSON list of lists and return only the list."
         ),
     ]
     DUMMY = {"name": "Love Me Do", "artist": "The Beatles"}
 
     def __init__(self):
         super().__init__(llm_id="claude", llm_kwargs_id="tagger")
-        self.prompter = HumanMessagePromptTemplate.from_template(SongTagger.PROMPT)
 
-    def _format_tracks(self, tracks):
+    def _format_tracks(self, tracks: List[Song]):
         formatted_tracks = "\n".join(
             [f'"{track["name"]}" by {track["artist"]}' for track in tracks]
         )
         return formatted_tracks
 
-    @retry(3, 0.1)
-    def _get_output_and_verify(self, input, songs):
+    def _verify_output(self, output: list, songs: List[Song]):
         try:
-            output = self.llm(input)
-            output_obj = json.loads(output.content)
-            assert (
-                type(output_obj) == list
-            ), f"Expected output to be a list, got {output_obj}"
             assert len(songs) + 1 == len(
-                output_obj
-            ), f"Expected {len(songs) + 1} songs (including dummy), got {len(output_obj)}"
+                output
+            ), f"Expected {len(songs) + 1} songs (including dummy), got {len(output)}"
             assert (
-                list_depth(output_obj) == 2
-            ), f"Expected output to be a list of lists, got {output_obj}"
-            return output_obj[1:]
+                list_depth(output) == 2
+            ), f"Expected output to be a list of lists, got {output}"
+            return output[1:]
         except:
             print("Output:", output)
             raise
 
-    def _normalize_output(self, output):
-        normalized = []
-        for song in output:
-            song_tags = []
-            for tag in song:
-                # Remove special characters
-                tag = "".join([c for c in tag if c.isalnum() or c == " "])
-
-                # Lowercase
-                tag = tag.lower()
-
-                # Remove extra whitespaces
-                tag = " ".join([word for word in tag.split(" ") if word])
-
-                song_tags.append(tag)
-            normalized.append(song_tags)
-        return normalized
-
-    def __call__(self, songs):
-        songs_str = self._format_tracks([SongTagger.DUMMY, *songs])
-        human_message = self.prompter.format(**{"songs": songs_str})
-        input = [*SongTagger.MESSAGES, human_message]
-        output = self._get_output_and_verify(input, songs)
-        return self._normalize_output(output)
+    @retry(3, 0.1)
+    def __call__(self, songs: List[Song]):
+        formatted_songs_input = self._format_tracks([SongTagger.DUMMY, *songs])
+        output = self.generate_with_prompt(
+            SongTagger.PROMPT,
+            {"songs": formatted_songs_input},
+            history=SongTagger.HISTORY,
+        )
+        parsed_output = self._parse_list(output)
+        verified_output = self._verify_output(parsed_output, songs)
+        formatted_output = [
+            self._normalize_tag(tag)
+            for song_tags in verified_output
+            for tag in song_tags
+        ]
+        return formatted_output
 
 
 def get_readers():
