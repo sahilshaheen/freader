@@ -1,51 +1,23 @@
-import os
 import logging
+
 import uvicorn
 from dotenv import load_dotenv
-from src.store import load_faiss_store
-from src.schema import IndexRequest, QueryRequest
-from src.utils import run_indexing_pipeline, run_query_pipeline
-from fastapi import FastAPI, BackgroundTasks
-from src.pipelines import load_indexing_pipeline, load_query_pipeline
-from src.retrievers import load_embedding_retriever
-from src.utils import upsert_index, get_all_indices
+from fastapi import FastAPI, BackgroundTasks, Depends
+
+from src.schema import IndexRequest, QueryRequest, Base
+from src.chains import get_readers, add_reader
+from src.utils import upsert_index, get_all_indices, get_session
+from sqlalchemy.orm import Session
 
 load_dotenv()
-use_oai = os.getenv("USE_OPENAI_API")
-api_key = os.getenv("OPENAI_API_KEY")
-faiss_index_path = os.getenv("FAISS_INDEX_PATH")
-if not faiss_index_path:
-    raise ValueError(
-        "FAISS index path is missing. Please set the FAISS_INDEX_PATH environment variable"
-    )
 logger = logging.getLogger("uvicorn")
-store = load_faiss_store(
-    faiss_index_path=faiss_index_path if os.path.exists(faiss_index_path) else None,
-)
-indexing_pipeline = load_indexing_pipeline(store)
-retriever = load_embedding_retriever(
-    store,
-    embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-    model_format="sentence_transformers",
-)
-if use_oai:
-    if not api_key:
-        raise ValueError(
-            "OpenAI API key is missing. Please set the OPENAI_API_KEY environment variable"
-        )
-    logger.warning("Using OpenAI for query pipeline.")
-    # retriever = load_embedding_retriever(
-    #     store,
-    #     batch_size=8,
-    #     embedding_model="ada",
-    #     api_key=api_key,
-    #     max_seq_len=1024,
-    # )
-    query_pipeline = load_query_pipeline(
-        retriever, model_name_or_path="text-davinci-003", api_key=api_key
-    )
-else:
-    query_pipeline = load_query_pipeline(retriever)
+
+
+readers = get_readers()
+
+with get_session() as session:
+    Base.metadata.create_all(session.get_bind())
+
 app = FastAPI()
 
 
@@ -55,19 +27,18 @@ async def root():
 
 
 @app.get("/indices")
-async def get_indices():
-    return get_all_indices(store.session)
+async def get_indices(session: Session = Depends(get_session)):
+    return get_all_indices(session)
 
 
 @app.post("/index")
 async def create_index(background_tasks: BackgroundTasks, request: IndexRequest):
     def scrape_and_index():
-        run_indexing_pipeline(
-            indexing_pipeline, request.index_name, request.urls, request.crawler_depth
-        )
-        store.update_embeddings(retriever)
-        store.save(faiss_index_path)
-        upsert_index(store.session, request.index_name, request.urls)
+        if request.index_name not in readers:
+            add_reader(readers, request.index_name)
+        readers[request.index_name].index_multiple(request.urls)
+        upsert_index(get_session(), request.index_name, request.urls)
+        logger.info(f"Succesfully indexed {request.urls} for {request.index_name}")
 
     background_tasks.add_task(scrape_and_index)
 
@@ -76,10 +47,9 @@ async def create_index(background_tasks: BackgroundTasks, request: IndexRequest)
 
 @app.post("/query")
 async def run_query(request: QueryRequest):
-    query_res = run_query_pipeline(
-        query_pipeline, request.query, request.index_name, request.top_k
-    )
-    return list(map(lambda answer: answer.to_dict(), query_res["answers"]))
+    output = readers[request.index_name].query(request.query)
+
+    return output
 
 
 if __name__ == "__main__":

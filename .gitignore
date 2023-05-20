@@ -44,3 +44,6 @@ Thumbs.db
 **/scratch*
 app_index.faiss
 app_index.json
+**/ref.py
+data/
+indices.json
