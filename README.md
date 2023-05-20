@@ -3,7 +3,7 @@
 A simple FastAPI server that leverages langchain to index information and query the resulting indices in many ways.
 
 ## Roadmap
-- [] Flexibility in input
+- [ ] Flexibility in input
   - [x] URLs
   - [x] Raw Text
   - [ ] YouTube (Medium priority)
